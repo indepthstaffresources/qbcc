@@ -385,9 +385,10 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
   // Pages of rows, each row's cells joined with " | ", top to bottom.
   async function pdfRows(pdfjs, bytes) {
     const doc = await pdfjs.getDocument({ data: bytes.slice(0), disableWorker: true, isEvalSupported: false }).promise;
-    const pages = [], loose = [];
+    const pages = [], loose = [], stream = [];
     for (let p = 1; p <= doc.numPages; p++) {
       const tc = await (await doc.getPage(p)).getTextContent();
+      stream.push(tc.items.map(it => it.str || "").filter(t => t.trim()));
       const items = tc.items.filter(it => it.str && it.str.trim()).map(it => ({ x: it.transform[4], y: it.transform[5], s: it.str.trim() }));
       // Exact rows (same baseline), as the tool has always read them
       const exact = {};
@@ -399,7 +400,7 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
       [...items].sort((a, b) => b.y - a.y || a.x - b.x).forEach(it => { const r = rows.find(r => Math.abs(r.y - it.y) <= 3); if (r) r.items.push(it); else rows.push({ y: it.y, items: [it] }); });
       loose.push(rows.sort((a, b) => b.y - a.y).map(r => r.items.sort((a, b) => a.x - b.x).map(i => i.s).join(" | ")));
     }
-    return { pages, loose, pageCount: doc.numPages };
+    return { pages, loose, stream, pageCount: doc.numPages };
   }
   const flat = rows => rows.flat().join("\n").replace(/ \| /g, " ").replace(/[ \t]+/g, " ");
 
@@ -421,7 +422,7 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
   }
 
   // ---------- ARD notification ----------
-  function parseARD(rows) {
+  function parseARD(rows, streamPages) {
     const all = rows.flat().map(r => r.trim());
     const text = flat(rows);
     const out = { flags: [] };
@@ -442,7 +443,25 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
         if (MONTHS.some(x => x.toLowerCase() === m[2].toLowerCase())) cands.push(parseDate(`${m[1]} ${m[2]} ${m[3]}`));
       }
     });
-    // 2. The date over three lines on its own ("31" / "December" / "2027"): how the tool has read real notices
+    // 2. The text in the order it is written in the file (the order Microsoft's own text extraction
+    //    gives, where the notice reads "... 31 December 2027"). Large letter-spaced text can be stored a
+    //    few letters at a time, so also try with the pieces joined up.
+    const MONTH_RE = MONTHS.join("|");
+    if (!cands.length && streamPages) {
+      streamPages.forEach(pg => {
+        const tries = [pg.join(" ").replace(/\s+/g, " "), pg.join("").replace(/\s+/g, "")];
+        tries.forEach((t, k) => {
+          if (k === 1 && cands.length) return;   // joined-up text only when the spaced text found nothing
+          const re = new RegExp(`(\\d{1,2})\\s*(${MONTH_RE})\\s*(20\\d{2})`, "gi"); let m;
+          while ((m = re.exec(t))) {
+            const before = t.slice(Math.max(0, m.index - 14), m.index);
+            if (/Date:?\s*$/i.test(before) && !/ReportingDate:?\s*$|Reporting\s+Date:?\s*$/i.test(before)) continue;   // the notice's own date
+            cands.push(parseDate(`${m[1]} ${m[2]} ${m[3]}`));
+          }
+        });
+      });
+    }
+    // 3. The date over three lines on its own ("31" / "December" / "2027")
     if (!cands.length) all.forEach((r, i) => {
       if (!/^\d{1,2}$/.test(r)) return;
       const look = all.slice(i + 1, i + 8);
@@ -451,7 +470,7 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
       const y = look.slice(mi + 1, mi + 6).find(x => /^20\d{2}$/.test(x));
       if (y) cands.push(parseDate(`${r} ${look[mi]} ${y}`));
     });
-    // 3. Backup: the same three words at the ends of lines shared with the other box
+    // 4. Backup: the same three words at the ends of lines shared with the other box
     if (!cands.length) {
       const cells = rows.flat().flatMap(r => r.split(" | ").map(c => c.trim())).filter(Boolean);
       cells.forEach((c, i) => {
@@ -629,6 +648,8 @@ ${rows.map(([l, v], i) => `<tr><td style="padding:4px 24px 4px 10px;border-botto
       ...reminders.map(r => P(H(r)))];
     if (rep.length) blocks.push(table(`Reported to QBCC for the Year Ended ${ye}`, rep));
     if (e.extra && e.extra.trim()) e.extra.trim().split(/\n\s*\n/).forEach(p => blocks.push(P(H(p).replace(/\n/g, "<br>"))));
+    const closing = "Please let us know if anything changes in your business during the year that could affect your Net Tangible Assets or revenue, as you may need to provide updated information to QBCC.";
+    blocks.push(P(H(closing)), P("Thank you."));
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0">
 <div>
 ${blocks.join("\n" + GAP + "\n")}
@@ -636,7 +657,8 @@ ${GAP}
 </div></body></html>`;
     const tline = rows => rows.map(([l, v]) => `  ${l}: ${v}`).join("\n");
     const text = [`${e.opening || "Hello"},`, intro, `Your QBCC Position\n${tline(pos)}`, "These figures are based on the last MFR Report accepted by QBCC, not your annual reporting.", ...reminders,
-      rep.length ? `Reported to QBCC for the Year Ended ${ye}\n${tline(rep)}` : "", e.extra || ""]
+      rep.length ? `Reported to QBCC for the Year Ended ${ye}\n${tline(rep)}` : "", e.extra || "",
+      "Please let us know if anything changes in your business during the year that could affect your Net Tangible Assets or revenue, as you may need to provide updated information to QBCC.", "Thank you."]
       .filter(Boolean).join("\n\n");
     return { subject, html, text };
   }
@@ -1118,10 +1140,10 @@ ${GAP}
     renderFiles(); fillFromDocs(); refresh();
   }
   async function readPdf(f) {
-    const { pages, loose, pageCount } = await C.pdfRows(pdfjsLib, f.bytes);
-    f.pages = pages; f.loose = loose; f.pageCount = pageCount;
+    const { pages, loose, stream, pageCount } = await C.pdfRows(pdfjsLib, f.bytes);
+    f.pages = pages; f.loose = loose; f.stream = stream; f.pageCount = pageCount;
     f.kind = C.kindOf(f.name, pages.flat().join("\n"));
-    if (f.kind === "ard") f.ard = C.parseARD(pages);
+    if (f.kind === "ard") f.ard = C.parseARD(pages, stream);
     if (f.kind === "submission") f.sub = C.parseSubmission(pages, loose);
   }
   function autoRoles() {
@@ -1155,7 +1177,7 @@ ${GAP}
         const was = f.role; f.role = sel.value;
         // Only one ARD notification and one submission can be in the pack
         if (f.role === "ard" || f.role === "submission") state.files.forEach(o => { if (o !== f && o.role === f.role) o.role = "out"; });
-        if ((f.role === "ard" && !f.ard) || (f.role === "submission" && !f.sub)) { if (f.role === "ard") f.ard = C.parseARD(f.pages || []); else f.sub = C.parseSubmission(f.pages || [], f.loose); }
+        if ((f.role === "ard" && !f.ard) || (f.role === "submission" && !f.sub)) { if (f.role === "ard") f.ard = C.parseARD(f.pages || [], f.stream); else f.sub = C.parseSubmission(f.pages || [], f.loose); }
         renderFiles();
         if (was === "ard" || was === "submission" || f.role === "ard" || f.role === "submission") fillFromDocs(); else refresh();
       };
