@@ -559,7 +559,7 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
     b();
     L.push("Dear " + (d.greeting || NR("greeting"))); b();
     L.push(`## ${d.year} QBCC Annual Reporting`); b();
-    L.push(`Your ${d.year} QBCC Annual Reporting has been completed${d.submitted ? ` and was lodged with the Queensland Building and Construction Commission (QBCC) on **${fmtDate(d.submitted)}**` : " and lodged with the Queensland Building and Construction Commission (QBCC)"}. Nothing needs to be signed or returned.`); b();
+    L.push(`Your ${d.year} QBCC Annual Reporting has been completed${d.submitted ? ` and was lodged with the Queensland Building and Construction Commission (QBCC) on **${fmtDate(d.submitted)}**` : " and lodged with the Queensland Building and Construction Commission (QBCC)"}.`); b();
     L.push("**Your QBCC Position**");
     L.push(`Net Tangible Assets    ${d.nta || NR("net tangible assets")}`);
     L.push(`Maximum Revenue    ${d.maxRevenue || NR("maximum revenue")}`);
@@ -575,7 +575,7 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
     L.push(`\u2022 ${d.year} Management Accounts${extras.length ? (extras.length === 1 ? " and " : ", ") + joinList(extras) : ""}`);
     b();
     if (d.extra && d.extra.trim()) { d.extra.trim().split(/\n\s*\n/).forEach(p => { L.push(p.replace(/\n/g, " ").trim()); b(); }); }
-    L.push("If you have any queries in relation to this, please contact our office."); b();
+    L.push("Nothing needs to be signed or returned. If you have any queries in relation to this, please contact our office."); b();
     L.push("Kind Regards,"); b();
     L.push("[SIGNATURE]"); b();
     (SIGNERS[d.signer] || SIGNERS.Renee).forEach(x => L.push(`**${x}**`));
