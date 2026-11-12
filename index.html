@@ -431,29 +431,42 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
     const ref = text.match(/Our reference:?\s*(\d+)/i); out.ref = ref ? ref[1] : null;
     const ld = text.match(/\bDate:?\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/); out.noticeDate = ld ? parseDate(ld[1]) : null;
     // Next annual reporting date: one row ("31 December 2027") or split over rows ("31" / "December" / "2027")
+    // 1. The date written on one line ("31 December 2027"), skipping the notice's own "Date:" line
     const cands = [];
-    all.forEach((r, i) => {
+    all.forEach(r => {
       const row = r.replace(/ \| /g, " ");
       const re = /\b(\d{1,2})\s+([A-Za-z]{3,9})\s+(20\d{2})\b/g; let m;
       while ((m = re.exec(row))) {
         const before = row.slice(Math.max(0, m.index - 22), m.index);
-        if (/\bDate:?\s*$/i.test(before) && !/Reporting\s+Date:?\s*$/i.test(before)) continue;   // the notice's own date
-        if (monthIndex(m[2]) >= 0) cands.push(parseDate(`${m[1]} ${m[2]} ${m[3]}`));
+        if (/\bDate:?\s*$/i.test(before) && !/Reporting\s+Date:?\s*$/i.test(before)) continue;
+        if (MONTHS.some(x => x.toLowerCase() === m[2].toLowerCase())) cands.push(parseDate(`${m[1]} ${m[2]} ${m[3]}`));
       }
     });
-    // The date can sit in its own box over three lines ("31" / "December" / "2027"), with text from the
-    // other box landing between the words. A month name standing on its own only appears in that date,
-    // so start from the month and look either side of it for the day and the year.
-    const cells = rows.flat().flatMap(r => r.split(" | ").map(c => c.trim())).filter(Boolean);
-    cells.forEach((c, i) => {
-      const parts = c.match(/^(\d{1,2})?\s*([A-Za-z]{3,9})\s*(20\d{2})?$/);
-      if (!parts || monthIndex(parts[2]) < 0 || !MONTHS.some(m => m.toLowerCase() === parts[2].toLowerCase())) return;
-      const day = parts[1] || [...cells.slice(Math.max(0, i - 40), i)].reverse().find(x => /^\d{1,2}$/.test(x) && +x >= 1 && +x <= 31);
-      const year = parts[3] || cells.slice(i + 1, i + 41).find(x => /^20\d{2}$/.test(x));
-      if (day && year) cands.push(parseDate(`${day} ${parts[2]} ${year}`));
+    // 2. The date over three lines on its own ("31" / "December" / "2027"): how the tool has read real notices
+    if (!cands.length) all.forEach((r, i) => {
+      if (!/^\d{1,2}$/.test(r)) return;
+      const look = all.slice(i + 1, i + 8);
+      const mi = look.findIndex(x => MONTHS.some(m => m.toLowerCase() === x.toLowerCase()));
+      if (mi < 0) return;
+      const y = look.slice(mi + 1, mi + 6).find(x => /^20\d{2}$/.test(x));
+      if (y) cands.push(parseDate(`${r} ${look[mi]} ${y}`));
     });
+    // 3. Backup: the same three words at the ends of lines shared with the other box
+    if (!cands.length) {
+      const cells = rows.flat().flatMap(r => r.split(" | ").map(c => c.trim())).filter(Boolean);
+      cells.forEach((c, i) => {
+        if (!/^\d{1,2}$/.test(c)) return;
+        const look = cells.slice(i + 1, i + 12);
+        const mi = look.findIndex(x => MONTHS.some(m => m.toLowerCase() === x.toLowerCase()));
+        if (mi < 0) return;
+        const y = look.slice(mi + 1, mi + 10).find(x => /^20\d{2}$/.test(x));
+        if (y) cands.push(parseDate(`${c} ${look[mi]} ${y}`));
+      });
+    }
     const good = cands.filter(Boolean).filter(d => !out.noticeDate || d.getTime() !== out.noticeDate.getTime());
-    out.ard = good.length ? good.sort((a, b) => b - a)[0] : null;
+    const distinct = [...new Set(good.map(d => d.getTime()))];
+    out.ard = distinct.length === 1 ? new Date(distinct[0]) : null;
+    if (distinct.length > 1) out.flags.push(`The ARD notification shows more than one date that could be the next annual reporting date (${joinList(distinct.map(t => fmtDate(new Date(t))))}). Type the right one in.`);
     // Licensee name and postal address: the lines between the notice details and "Dear ..."
     const dearAt = all.findIndex(r => /^Dear\s+/i.test(r));
     const dateAt = all.findIndex(r => /^Date:?\s*\|?\s*\d/.test(r) || /\|\s*Date:?\s*\|/.test(r));
@@ -464,7 +477,7 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
       if (block.length) { out.licensee = block[0]; out.address = block.slice(1, 4); }
     }
     const miss = [];
-    if (!out.nta) miss.push("net tangible assets"); if (!out.maxRevenue) miss.push("maximum revenue"); if (!out.ard) miss.push("next annual reporting date");
+    if (!out.nta) miss.push("net tangible assets"); if (!out.maxRevenue) miss.push("maximum revenue"); if (!out.ard && distinct.length < 2) miss.push("next annual reporting date");
     if (miss.length) out.flags.push(`Couldn\u2019t read the ${joinList(miss)} from the ARD notification. Type ${miss.length > 1 ? "them" : "it"} in.`);
     return out;
   }
@@ -603,23 +616,26 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
       "You can exceed your Maximum Revenue by up to 10% without providing updated financial information to QBCC. If your actual revenue exceeds your Maximum Revenue by more than 10%, you must provide QBCC with an MFR Report or Self-Certifying Declaration to amend your Maximum Revenue."];
     const ye = e.yearEnd ? fmtDate(e.yearEnd) : `30 June ${e.year}`;
     const FONT = "font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt;color:#000000";   // the firm's email font: Calibri 11
-    const table = (title, rows, note) => `<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:6px 0 4px;min-width:360px;${FONT}">
-<tr><td colspan="2" style="background:#56776C;color:#FFFFFF;font-weight:bold;padding:7px 12px">${H(title)}</td></tr>
-${rows.map(([l, v], i) => `<tr><td style="padding:6px 12px;border-bottom:1px solid #D4E2DD;background:${i % 2 ? "#FFFFFF" : "#EAF0EE"}">${H(l)}</td><td style="padding:6px 12px;border-bottom:1px solid #D4E2DD;text-align:right;font-weight:bold;white-space:nowrap;background:${i % 2 ? "#FFFFFF" : "#EAF0EE"}">${H(v)}</td></tr>`).join("\n")}
-</table>${note ? `<p style="margin:2px 0 14px;${FONT}">${H(note)}</p>` : ""}`;
-    const para = t => `<p style="margin:0 0 12px;${FONT}">${t}</p>`;
-    const extraHtml = e.extra && e.extra.trim() ? e.extra.trim().split(/\n\s*\n/).map(p => para(H(p).replace(/\n/g, "<br>"))).join("\n") : "";
+    // Laid out the way Outlook builds an email: paragraphs with no margins and an empty line between
+    // blocks, so the spacing looks the same as an email typed by hand and Outlook doesn't add its own.
+    const P = t => `<p style="margin:0;${FONT}">${t}</p>`;
+    const GAP = P("&nbsp;");
+    const table = (title, rows) => `<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;${FONT}">
+<tr><td colspan="2" style="background:#56776C;color:#FFFFFF;font-weight:bold;padding:5px 10px;${FONT};color:#FFFFFF">${H(title)}</td></tr>
+${rows.map(([l, v], i) => `<tr><td style="padding:4px 24px 4px 10px;border-bottom:1px solid #D4E2DD;background:${i % 2 ? "#FFFFFF" : "#EAF0EE"};${FONT}">${H(l)}</td><td style="padding:4px 10px;border-bottom:1px solid #D4E2DD;text-align:right;font-weight:bold;white-space:nowrap;background:${i % 2 ? "#FFFFFF" : "#EAF0EE"};${FONT}">${H(v)}</td></tr>`).join("\n")}
+</table>`;
+    const blocks = [P(H(e.opening || "Hello") + ","), P(introHtml), table("Your QBCC Position", pos),
+      P(H("These figures are based on the last MFR Report accepted by QBCC, not your annual reporting.")),
+      ...reminders.map(r => P(H(r)))];
+    if (rep.length) blocks.push(table(`Reported to QBCC for the Year Ended ${ye}`, rep));
+    if (e.extra && e.extra.trim()) e.extra.trim().split(/\n\s*\n/).forEach(p => blocks.push(P(H(p).replace(/\n/g, "<br>"))));
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0">
-<div style="${FONT}">
-${para(H(e.opening || "Hello") + ",")}
-${para(introHtml)}
-${table("Your QBCC Position", pos, "Based on the last MFR Report accepted by QBCC. Lodging your annual reporting does not change these figures.")}
-${reminders.map(r => para(H(r))).join("\n")}
-${rep.length ? table(`Reported to QBCC for the Year Ended ${ye}`, rep, "From your 2026 Annual Reporting Submission.".replace("2026", e.year)) : ""}
-${extraHtml}
+<div>
+${blocks.join("\n" + GAP + "\n")}
+${GAP}
 </div></body></html>`;
     const tline = rows => rows.map(([l, v]) => `  ${l}: ${v}`).join("\n");
-    const text = [`${e.opening || "Hello"},`, intro, "Your QBCC Position (based on the last MFR Report accepted by QBCC)", tline(pos), ...reminders,
+    const text = [`${e.opening || "Hello"},`, intro, `Your QBCC Position\n${tline(pos)}`, "These figures are based on the last MFR Report accepted by QBCC, not your annual reporting.", ...reminders,
       rep.length ? `Reported to QBCC for the Year Ended ${ye}\n${tline(rep)}` : "", e.extra || ""]
       .filter(Boolean).join("\n\n");
     return { subject, html, text };
