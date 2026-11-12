@@ -279,7 +279,6 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
       <div><label for="f_ast">Total assets</label><input type="text" id="f_ast" class="fig" inputmode="decimal"></div>
       <div><label for="f_lia">Total liabilities</label><input type="text" id="f_lia" class="fig" inputmode="decimal"></div>
       <div><label for="f_eq">Total equity</label><input type="text" id="f_eq" class="fig" inputmode="decimal"></div>
-      <div><label for="f_cash">Cash at the end of the year</label><input type="text" id="f_cash" class="fig" inputmode="decimal"></div>
     </div>
 
     <div class="grp">Email</div>
@@ -475,7 +474,7 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
     ["totalRevenue", "Total revenue"], ["totalExpenses", "Total expenses"],
     ["currentAssets", "Total current assets"], ["nonCurrentAssets", "Total non-current assets"],
     ["currentLiabilities", "Total current liabilities"], ["nonCurrentLiabilities", "Total non-current liabilities"],
-    ["totalEquity", "Total equity"], ["cashEnd", "Cash and cash equivalents at the end of the year"],
+    ["totalEquity", "Total equity"],
   ];
   function parseSubmission(rows, looseRows) {
     const text = flat(rows);
@@ -589,7 +588,7 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
     const rows = [
       ["Total revenue", f.totalRevenue], ["Total expenses", f.totalExpenses],
       ["Total assets", sum(f.currentAssets, f.nonCurrentAssets)], ["Total liabilities", sum(f.currentLiabilities, f.nonCurrentLiabilities)],
-      ["Total equity", f.totalEquity], ["Cash at the end of the year", f.cashEnd],
+      ["Total equity", f.totalEquity],
     ];
     return rows.filter(r => r[1] !== undefined && r[1] !== null && !isNaN(r[1]));
   }
@@ -603,11 +602,11 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
     const reminders = ["Please be advised, if your Net Tangible Assets reduce by 30% or more, you will need to provide QBCC with an MFR Report or Self-Certifying Declaration within 30 days of the reduction.",
       "You can exceed your Maximum Revenue by up to 10% without providing updated financial information to QBCC. If your actual revenue exceeds your Maximum Revenue by more than 10%, you must provide QBCC with an MFR Report or Self-Certifying Declaration to amend your Maximum Revenue."];
     const ye = e.yearEnd ? fmtDate(e.yearEnd) : `30 June ${e.year}`;
-    const FONT = "font-family:'Segoe UI',Arial,sans-serif;font-size:10.5pt;color:#414042";
+    const FONT = "font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt;color:#000000";   // the firm's email font: Calibri 11
     const table = (title, rows, note) => `<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:6px 0 4px;min-width:360px;${FONT}">
 <tr><td colspan="2" style="background:#56776C;color:#FFFFFF;font-weight:bold;padding:7px 12px">${H(title)}</td></tr>
 ${rows.map(([l, v], i) => `<tr><td style="padding:6px 12px;border-bottom:1px solid #D4E2DD;background:${i % 2 ? "#FFFFFF" : "#EAF0EE"}">${H(l)}</td><td style="padding:6px 12px;border-bottom:1px solid #D4E2DD;text-align:right;font-weight:bold;white-space:nowrap;background:${i % 2 ? "#FFFFFF" : "#EAF0EE"}">${H(v)}</td></tr>`).join("\n")}
-</table>${note ? `<p style="margin:2px 0 14px;${FONT};font-size:9pt;color:#56776C">${H(note)}</p>` : ""}`;
+</table>${note ? `<p style="margin:2px 0 14px;${FONT}">${H(note)}</p>` : ""}`;
     const para = t => `<p style="margin:0 0 12px;${FONT}">${t}</p>`;
     const extraHtml = e.extra && e.extra.trim() ? e.extra.trim().split(/\n\s*\n/).map(p => para(H(p).replace(/\n/g, "<br>"))).join("\n") : "";
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0">
@@ -1264,7 +1263,7 @@ ${extraHtml}
       const put = (id, v) => { $(id).value = v === undefined ? "" : C.money(v); };
       put("f_rev", f.totalRevenue); put("f_exp", f.totalExpenses);
       put("f_ast", sum(f.currentAssets, f.nonCurrentAssets)); put("f_lia", sum(f.currentLiabilities, f.nonCurrentLiabilities));
-      put("f_eq", f.totalEquity); put("f_cash", f.cashEnd);
+      put("f_eq", f.totalEquity);
       $("yearEnd").value = s.yearEnd ? C.fmtDate(s.yearEnd) : "";
       $("submitted").value = s.submitted ? C.fmtDate(s.submitted) : "";
     }
@@ -1294,7 +1293,7 @@ ${extraHtml}
       year: fy, yearEnd: C.parseDate(val("yearEnd")), submitted: C.parseDate(val("submitted")),
       supportLabels: [...new Set(sup.map(f => C.supportKind(f.name).label))],
       extra: $("extra").value, opening: val("opening"), subject: val("subject"), to: recipients(),
-      reported: [["Total Revenue", "f_rev"], ["Total Expenses", "f_exp"], ["Total Assets", "f_ast"], ["Total Liabilities", "f_lia"], ["Total Equity", "f_eq"], ["Cash at the End of the Year", "f_cash"]]
+      reported: [["Total Revenue", "f_rev"], ["Total Expenses", "f_exp"], ["Total Assets", "f_ast"], ["Total Liabilities", "f_lia"], ["Total Equity", "f_eq"]]
         .map(([l, id]) => [l, moneyField(id)]).filter(([, c]) => c !== null && !isNaN(c)).map(([l, c]) => [l, C.money(c)]),
     };
   }
@@ -1322,7 +1321,7 @@ ${extraHtml}
     if (!/^\d{4}$/.test(d.year)) block.push("Add the financial year in step 4, like 2026.");
     if (val("submitted") && !d.submitted) warn.push("Write the submission date in full, like 9 November 2026, or clear it.");
     if (val("yearEnd") && !d.yearEnd) warn.push("Write the year end in full, like 30 June 2026.");
-    ["f_rev", "f_exp", "f_ast", "f_lia", "f_eq", "f_cash"].forEach(id => { if (isNaN(moneyField(id))) warn.push(`${$(id).previousElementSibling.textContent} doesn\u2019t look like an amount, so it\u2019s left out of the email.`); });
+    ["f_rev", "f_exp", "f_ast", "f_lia", "f_eq"].forEach(id => { if (isNaN(moneyField(id))) warn.push(`${$(id).previousElementSibling.textContent} doesn\u2019t look like an amount, so it\u2019s left out of the email.`); });
     if (a && a.ard) { a.ard.flags.forEach(f => warn.push(f)); if (a.ard.licensee && !C.sameName(d.client, a.ard.licensee)) warn.push(`The ARD notification is addressed to ${a.ard.licensee}. Check it belongs to ${d.client}.`); }
     if (s && s.sub) {
       s.sub.flags.forEach(f => warn.push(f));
