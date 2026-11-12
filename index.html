@@ -389,9 +389,12 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
     const pages = [];
     for (let p = 1; p <= doc.numPages; p++) {
       const tc = await (await doc.getPage(p)).getTextContent();
-      const rows = {};
-      tc.items.forEach(it => { if (!it.str || !it.str.trim()) return; const y = Math.round(it.transform[5]); (rows[y] = rows[y] || []).push([it.transform[4], it.str.trim()]); });
-      pages.push(Object.keys(rows).map(Number).sort((a, b) => b - a).map(y => rows[y].sort((a, b) => a[0] - b[0]).map(r => r[1]).join(" | ")));
+      // Group items into rows. A label and its amount can sit a point or two apart vertically, so
+      // anything within 3 points of a row's first item joins that row.
+      const items = tc.items.filter(it => it.str && it.str.trim()).map(it => ({ x: it.transform[4], y: it.transform[5], s: it.str.trim() })).sort((a, b) => b.y - a.y || a.x - b.x);
+      const rows = [];
+      items.forEach(it => { const r = rows.find(r => Math.abs(r.y - it.y) <= 3); if (r) r.items.push(it); else rows.push({ y: it.y, items: [it] }); });
+      pages.push(rows.sort((a, b) => b.y - a.y).map(r => r.items.sort((a, b) => a.x - b.x).map(i => i.s).join(" | ")));
     }
     return { pages, pageCount: doc.numPages };
   }
@@ -527,18 +530,22 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
     b();
     L.push("Dear " + (d.greeting || NR("greeting"))); b();
     L.push(`## ${d.year} QBCC Annual Reporting`); b();
-    const extras = (d.supportLabels || []).filter(l => l !== "Management Accounts").map(l => l.toLowerCase());
-    L.push(`Your ${d.year} QBCC annual reporting has been completed${d.submitted ? ` and was submitted to the Queensland Building and Construction Commission (QBCC) on ${fmtDate(d.submitted)}` : " and submitted to the Queensland Building and Construction Commission (QBCC)"}. Please find enclosed the ARD notification from QBCC, your annual reporting submission and your ${d.year} management accounts${extras.length ? `, including the ${joinList(extras)}` : ""}.`); b();
-    L.push("**Your QBCC Position**");
+    L.push(`Your ${d.year} QBCC Annual Reporting has been completed${d.submitted ? ` and was lodged with the Queensland Building and Construction Commission (QBCC) on ${fmtDate(d.submitted)}` : " and lodged with the Queensland Building and Construction Commission (QBCC)"}. Lodging your annual reporting does not change your Net Tangible Assets or Maximum Revenue.`); b();
+    L.push("**For Your Records:**");
+    L.push(`\u2022 ${d.year} Annual Financial Reporting Documentation`);
+    L.push(`\u2022 ${d.year} Annual Reporting Submission`);
+    const extras = (d.supportLabels || []).filter(l => l !== "Management Accounts");
+    L.push(`\u2022 ${d.year} Management Accounts${extras.length ? (extras.length === 1 ? " and " : ", ") + joinList(extras) : ""}`);
+    b();
+    L.push("**Your QBCC Position** (based on the last MFR Report accepted by QBCC)");
     L.push(`Net Tangible Assets    ${d.nta || NR("net tangible assets")}`);
     L.push(`Maximum Revenue    ${d.maxRevenue || NR("maximum revenue")}`);
     L.push(`Next Annual Reporting Date    **${d.ard ? fmtDate(d.ard) : NR("next annual reporting date")}**`);
     b();
-    L.push("These figures are from your ARD notification and are based on the last MFR report accepted by QBCC. Lodging your annual reporting does not change them."); b();
-    L.push("Remember, if your net tangible assets reduce by 30% or more, you will need to provide QBCC with an MFR report or Self-Certifying Declaration within 30 days of the reduction."); b();
-    L.push("You can exceed your maximum revenue by up to 10% without providing updated financial information to QBCC. If your actual revenue exceeds your maximum revenue by more than 10%, you must provide QBCC with an MFR report or Self-Certifying Declaration to amend your maximum revenue."); b();
+    L.push("Please be advised, if your Net Tangible Assets reduce by 30% or more, you will need to provide QBCC with an MFR Report or Self-Certifying Declaration within 30 days of the reduction."); b();
+    L.push("You can exceed your Maximum Revenue by up to 10% without providing updated financial information to QBCC. If your actual revenue exceeds your Maximum Revenue by more than 10%, you must provide QBCC with an MFR Report or Self-Certifying Declaration to amend your Maximum Revenue."); b();
     if (d.extra && d.extra.trim()) { d.extra.trim().split(/\n\s*\n/).forEach(p => { L.push(p.replace(/\n/g, " ").trim()); b(); }); }
-    L.push("Nothing in this pack needs to be signed or returned. If you have any queries in relation to this, please contact our office."); b();
+    L.push("Nothing needs to be signed or returned. If you have any queries in relation to this, please contact our office."); b();
     L.push("Kind Regards,"); b();
     L.push("[SIGNATURE]"); b();
     (SIGNERS[d.signer] || SIGNERS.Renee).forEach(x => L.push(`**${x}**`));
@@ -558,14 +565,12 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
   }
   function composeEmail(e) {
     const subject = e.subject || `${e.year} QBCC Annual Reporting - ${e.client}`;
-    const extras = (e.supportLabels || []).filter(l => l !== "Management Accounts").map(l => l.toLowerCase());
-    const contents = `the ARD notification, your annual reporting submission and your ${e.year} management accounts${extras.length ? ` (including the ${joinList(extras)})` : ""}`;
-    const intro = `Your ${e.year} QBCC annual reporting has been completed${e.submitted ? ` and was submitted to QBCC on ${fmtDate(e.submitted)}` : ""}. Your annual reporting pack is attached, with ${contents}.`;
-    const pos = [["Net tangible assets", e.nta || ""], ["Maximum revenue", e.maxRevenue || ""], ["Next annual reporting date", e.ard ? fmtDate(e.ard) : ""]];
+    const intro = `Your ${e.year} QBCC Annual Reporting has been completed${e.submitted ? ` and was lodged with QBCC on ${fmtDate(e.submitted)}` : " and lodged with QBCC"}. Please find attached your ${e.year} QBCC Annual Reporting Pack for your records. Nothing needs to be signed or returned.`;
+    const pos = [["Net Tangible Assets", e.nta || ""], ["Maximum Revenue", e.maxRevenue || ""], ["Next Annual Reporting Date", e.ard ? fmtDate(e.ard) : ""]];
     const rep = e.reported || reportedRows(e.figures || {}).map(([l, v]) => [l, money(v)]);
-    const reminders = "If your net tangible assets reduce by 30% or more, you will need to give QBCC an MFR report or Self-Certifying Declaration within 30 days. You can exceed your maximum revenue by up to 10%, but if your actual revenue goes more than 10% over, you must give QBCC an MFR report or Self-Certifying Declaration to amend it.";
+    const reminders = ["Please be advised, if your Net Tangible Assets reduce by 30% or more, you will need to provide QBCC with an MFR Report or Self-Certifying Declaration within 30 days of the reduction.",
+      "You can exceed your Maximum Revenue by up to 10% without providing updated financial information to QBCC. If your actual revenue exceeds your Maximum Revenue by more than 10%, you must provide QBCC with an MFR Report or Self-Certifying Declaration to amend your Maximum Revenue."];
     const ye = e.yearEnd ? fmtDate(e.yearEnd) : `30 June ${e.year}`;
-    const close = "Nothing needs to be signed or returned.";
     const FONT = "font-family:'Segoe UI',Arial,sans-serif;font-size:10.5pt;color:#414042";
     const table = (title, rows, note) => `<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:6px 0 4px;min-width:360px;${FONT}">
 <tr><td colspan="2" style="background:#56776C;color:#FFFFFF;font-weight:bold;padding:7px 12px">${H(title)}</td></tr>
@@ -575,17 +580,16 @@ ${rows.map(([l, v], i) => `<tr><td style="padding:6px 12px;border-bottom:1px sol
     const extraHtml = e.extra && e.extra.trim() ? e.extra.trim().split(/\n\s*\n/).map(p => para(H(p).replace(/\n/g, "<br>"))).join("\n") : "";
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0">
 <div style="${FONT}">
-${para(H(e.opening || "Hi") + ",")}
+${para(H(e.opening || "Hello") + ",")}
 ${para(H(intro))}
-${table("Your QBCC position", pos, "From your ARD notification, based on the last MFR report accepted by QBCC.")}
-${para(H(reminders))}
-${rep.length ? table(`What we reported to QBCC for the year ended ${ye}`, rep, "From your annual reporting submission. Lodging your annual reporting doesn\u2019t change your maximum revenue.") : ""}
+${table("Your QBCC Position", pos, "Based on the last MFR Report accepted by QBCC. Lodging your annual reporting does not change these figures.")}
+${reminders.map(r => para(H(r))).join("\n")}
+${rep.length ? table(`Reported to QBCC for the Year Ended ${ye}`, rep, "From your 2026 Annual Reporting Submission.".replace("2026", e.year)) : ""}
 ${extraHtml}
-${para(H(close))}
 </div></body></html>`;
     const tline = rows => rows.map(([l, v]) => `  ${l}: ${v}`).join("\n");
-    const text = [`${e.opening || "Hi"},`, intro, "Your QBCC position (from your ARD notification)", tline(pos), reminders,
-      rep.length ? `What we reported to QBCC for the year ended ${ye}\n${tline(rep)}` : "", e.extra || "", close]
+    const text = [`${e.opening || "Hello"},`, intro, "Your QBCC Position (based on the last MFR Report accepted by QBCC)", tline(pos), ...reminders,
+      rep.length ? `Reported to QBCC for the Year Ended ${ye}\n${tline(rep)}` : "", e.extra || ""]
       .filter(Boolean).join("\n\n");
     return { subject, html, text };
   }
@@ -1203,7 +1207,7 @@ ${para(H(close))}
   }
   function setOpening() {
     const g = $("greeting").value.trim();
-    $("opening").value = !g ? "" : /^director/i.test(g) ? "Dear Director" : `Hi ${g}`;
+    $("opening").value = !g ? "" : /^director/i.test(g) ? "Dear Director" : `Hello ${g}`;
   }
   const extraEmails = () => $("extraTo").value.split(/[,;\s]+/).map(x => x.trim()).filter(Boolean);
   function recipients() {
@@ -1258,7 +1262,7 @@ ${para(H(close))}
       year: fy, yearEnd: C.parseDate(val("yearEnd")), submitted: C.parseDate(val("submitted")),
       supportLabels: [...new Set(sup.map(f => C.supportKind(f.name).label))],
       extra: $("extra").value, opening: val("opening"), subject: val("subject"), to: recipients(),
-      reported: [["Total revenue", "f_rev"], ["Total expenses", "f_exp"], ["Total assets", "f_ast"], ["Total liabilities", "f_lia"], ["Total equity", "f_eq"], ["Cash at the end of the year", "f_cash"]]
+      reported: [["Total Revenue", "f_rev"], ["Total Expenses", "f_exp"], ["Total Assets", "f_ast"], ["Total Liabilities", "f_lia"], ["Total Equity", "f_eq"], ["Cash at the End of the Year", "f_cash"]]
         .map(([l, id]) => [l, moneyField(id)]).filter(([, c]) => c !== null && !isNaN(c)).map(([l, c]) => [l, C.money(c)]),
     };
   }
