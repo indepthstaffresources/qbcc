@@ -386,17 +386,21 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
   // Pages of rows, each row's cells joined with " | ", top to bottom.
   async function pdfRows(pdfjs, bytes) {
     const doc = await pdfjs.getDocument({ data: bytes.slice(0), disableWorker: true, isEvalSupported: false }).promise;
-    const pages = [];
+    const pages = [], loose = [];
     for (let p = 1; p <= doc.numPages; p++) {
       const tc = await (await doc.getPage(p)).getTextContent();
-      // Group items into rows. A label and its amount can sit a point or two apart vertically, so
-      // anything within 3 points of a row's first item joins that row.
-      const items = tc.items.filter(it => it.str && it.str.trim()).map(it => ({ x: it.transform[4], y: it.transform[5], s: it.str.trim() })).sort((a, b) => b.y - a.y || a.x - b.x);
+      const items = tc.items.filter(it => it.str && it.str.trim()).map(it => ({ x: it.transform[4], y: it.transform[5], s: it.str.trim() }));
+      // Exact rows (same baseline), as the tool has always read them
+      const exact = {};
+      items.forEach(it => { const y = Math.round(it.y); (exact[y] = exact[y] || []).push(it); });
+      pages.push(Object.keys(exact).map(Number).sort((a, b) => b - a).map(y => exact[y].sort((a, b) => a.x - b.x).map(i => i.s).join(" | ")));
+      // Loose rows: anything within 3 points joins a row. Only used as a second try for submission
+      // figures whose amount sits slightly above or below its label.
       const rows = [];
-      items.forEach(it => { const r = rows.find(r => Math.abs(r.y - it.y) <= 3); if (r) r.items.push(it); else rows.push({ y: it.y, items: [it] }); });
-      pages.push(rows.sort((a, b) => b.y - a.y).map(r => r.items.sort((a, b) => a.x - b.x).map(i => i.s).join(" | ")));
+      [...items].sort((a, b) => b.y - a.y || a.x - b.x).forEach(it => { const r = rows.find(r => Math.abs(r.y - it.y) <= 3); if (r) r.items.push(it); else rows.push({ y: it.y, items: [it] }); });
+      loose.push(rows.sort((a, b) => b.y - a.y).map(r => r.items.sort((a, b) => a.x - b.x).map(i => i.s).join(" | ")));
     }
-    return { pages, pageCount: doc.numPages };
+    return { pages, loose, pageCount: doc.numPages };
   }
   const flat = rows => rows.flat().join("\n").replace(/ \| /g, " ").replace(/[ \t]+/g, " ");
 
@@ -437,11 +441,17 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
         if (/\bDate:?\s*$/i.test(before) && !/Reporting\s+Date:?\s*$/i.test(before)) continue;   // the notice's own date
         if (monthIndex(m[2]) >= 0) cands.push(parseDate(`${m[1]} ${m[2]} ${m[3]}`));
       }
-      if (/^\d{1,2}$/.test(r)) {
-        const look = all.slice(i + 1, i + 8);
-        const mi = look.findIndex(x => monthIndex(x) >= 0 && /^[A-Za-z]{3,9}$/.test(x));
-        if (mi >= 0) { const y = look.slice(mi + 1, mi + 6).find(x => /^20\d{2}$/.test(x)); if (y) cands.push(parseDate(`${r} ${look[mi]} ${y}`)); }
-      }
+    });
+    // The date can sit in its own box over three lines ("31" / "December" / "2027"), with text from the
+    // other box landing between the words. A month name standing on its own only appears in that date,
+    // so start from the month and look either side of it for the day and the year.
+    const cells = rows.flat().flatMap(r => r.split(" | ").map(c => c.trim())).filter(Boolean);
+    cells.forEach((c, i) => {
+      const parts = c.match(/^(\d{1,2})?\s*([A-Za-z]{3,9})\s*(20\d{2})?$/);
+      if (!parts || monthIndex(parts[2]) < 0 || !MONTHS.some(m => m.toLowerCase() === parts[2].toLowerCase())) return;
+      const day = parts[1] || [...cells.slice(Math.max(0, i - 40), i)].reverse().find(x => /^\d{1,2}$/.test(x) && +x >= 1 && +x <= 31);
+      const year = parts[3] || cells.slice(i + 1, i + 41).find(x => /^20\d{2}$/.test(x));
+      if (day && year) cands.push(parseDate(`${day} ${parts[2]} ${year}`));
     });
     const good = cands.filter(Boolean).filter(d => !out.noticeDate || d.getTime() !== out.noticeDate.getTime());
     out.ard = good.length ? good.sort((a, b) => b - a)[0] : null;
@@ -467,33 +477,52 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
     ["currentLiabilities", "Total current liabilities"], ["nonCurrentLiabilities", "Total non-current liabilities"],
     ["totalEquity", "Total equity"], ["cashEnd", "Cash and cash equivalents at the end of the year"],
   ];
-  function parseSubmission(rows) {
+  function parseSubmission(rows, looseRows) {
     const text = flat(rows);
     const out = { figures: {}, flags: [] };
     const esc = s => s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
     // Long labels wrap onto a second line in the QBCC form, and the amount can sit beside the first
     // line ("...at the end of the  $ 249,563.00" then "year"). So match the words across line breaks,
     // and if the full label isn't followed by an amount, try it without its last one or two words.
-    const VAL = "\\s*(-\\s*)?\\$\\s*([\\d,]+(?:\\.\\d{1,2})?)";
-    for (const [key, label] of FIGURES) {
-      const words = label.split(" ");
-      for (let drop = 0; drop <= Math.max(0, Math.min(2, words.length - 3)); drop++) {
-        const m = text.match(new RegExp(words.slice(0, words.length - drop).map(esc).join("\\s+") + VAL, "i"));
-        if (m) { out.figures[key] = toCents(m[2]) * (m[1] ? -1 : 1); break; }
+    // On the real form long labels wrap over two lines and the amount can sit before, after or
+    // between the two halves ("Cash and cash equivalents at" / "$ 491,089.37" / "the end of the year").
+    // So an amount may appear between any two words of the label, or straight after it.
+    const MONEY = "(?:-\\s*)?\\$\\s*[\\d,]+(?:\\.\\d{1,2})?";
+    const SEP = "\\s+(?:" + MONEY + "\\s+)?";
+    const take = str => { const v = str.match(/(-\s*)?\$\s*([\d,]+(?:\.\d{1,2})?)/); return v ? toCents(v[2]) * (v[1] ? -1 : 1) : undefined; };
+    const texts = [text].concat(looseRows ? [flat(looseRows)] : []);
+    for (const [key, label] of FIGURES) for (const tx of texts) {
+      if (out.figures[key] !== undefined) break;
+      const words = label.split(" ").map(esc);
+      // 1. full label, amount inside it or straight after it
+      let m = tx.match(new RegExp(words.join(SEP) + "(?:\\s*" + MONEY + ")?", "i"));
+      if (m && take(m[0]) !== undefined) { out.figures[key] = take(m[0]); break; }
+      // 2. amount beside the first line, with the last one or two words wrapped below it
+      for (let drop = 1; drop <= Math.max(0, Math.min(2, words.length - 3)); drop++) {
+        m = tx.match(new RegExp(words.slice(0, words.length - drop).join(SEP) + "\\s*" + MONEY, "i"));
+        if (m) { out.figures[key] = take(m[0]); break; }
       }
     }
     const g = re => { const m = text.match(re); return m ? m[1].trim() : null; };
     out.caseNo = g(/Case Number\s*:?\s*(\d+)/i);
     const sd = g(/Submission date:?\s*(\d{1,2}\/\d{1,2}\/\d{4})/i); out.submitted = sd ? parseDate(sd) : null;
-    out.licensee = g(/Licensee Name\s+(.+?)\s+Licensee Number/i);
-    out.licenceNo = g(/Licensee Number\s+(\d+)/i);
+    // Name and number can sit side by side over two lines ("Licensee Name / Licensee Number /
+    // TRADE PLUMBING AND DRAINAGE PTY / LTD 80869"), so read the block up to the ABN as a whole.
+    const lic = text.match(/Licensee Name\s+([\s\S]*?)\s+(?:\*\s*)?(?:ABN|ACN|Year end date)\b/i);
+    if (lic) {
+      const block = lic[1];
+      const no = block.match(/Licensee Number[\s\S]*?\b(\d{3,})\b/i);
+      out.licenceNo = no ? no[1] : null;
+      const name = block.replace(/Licensee Number/i, " ").replace(out.licenceNo ? new RegExp("\\b" + out.licenceNo + "\\b") : /$^/, " ").replace(/\s+/g, " ").trim();
+      out.licensee = name || null;
+    }
     const ye = g(/Year end date\s+(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/i); out.yearEnd = ye ? parseDate(ye) : null;
     out.category = g(/(Financial Categor(?:y|ies)\s+[\d\-\u2013 ]+)/i);
     // Attachments table. Long names wrap inside the table cells, so keep the whole section as text
     // (for matching folder files) and count the uploads by their timestamps.
     const sec = (text.split(/\bAttachments\b/i)[1] || "").split(/\b(?:Additional Information|Declaration)\b/i)[0];
     out.attachmentText = sec.replace(/Title\s+File\s+Last Modified Date\s+Created By/i, " ");
-    out.attachmentCount = (sec.match(/\d{1,2}\/\d{1,2}\/\d{4}\s+\d{1,2}:\d{2}\s*[AP]M/gi) || []).length;
+    out.attachmentCount = (sec.match(/\d{1,2}\/\d{1,2}\/\d{4}\s+\d{1,2}:\d{2}/g) || []).length;   // "PM" can wrap onto its own line
     const miss = FIGURES.filter(([k]) => out.figures[k] === undefined).map(([, l]) => l.toLowerCase());
     if (miss.length) out.flags.push(`Couldn\u2019t read ${joinList(miss)} from the annual reporting submission. Type ${miss.length > 1 ? "them" : "it"} in or leave the line out.`);
     return out;
@@ -530,22 +559,23 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
     b();
     L.push("Dear " + (d.greeting || NR("greeting"))); b();
     L.push(`## ${d.year} QBCC Annual Reporting`); b();
-    L.push(`Your ${d.year} QBCC Annual Reporting has been completed${d.submitted ? ` and was lodged with the Queensland Building and Construction Commission (QBCC) on ${fmtDate(d.submitted)}` : " and lodged with the Queensland Building and Construction Commission (QBCC)"}. Lodging your annual reporting does not change your Net Tangible Assets or Maximum Revenue.`); b();
+    L.push(`Your ${d.year} QBCC Annual Reporting has been completed${d.submitted ? ` and was lodged with the Queensland Building and Construction Commission (QBCC) on **${fmtDate(d.submitted)}**` : " and lodged with the Queensland Building and Construction Commission (QBCC)"}. Nothing needs to be signed or returned.`); b();
+    L.push("**Your QBCC Position**");
+    L.push(`Net Tangible Assets    ${d.nta || NR("net tangible assets")}`);
+    L.push(`Maximum Revenue    ${d.maxRevenue || NR("maximum revenue")}`);
+    L.push(`Next Annual Reporting Date    **${d.ard ? fmtDate(d.ard) : NR("next annual reporting date")}**`);
+    b();
+    L.push("These figures come from the last MFR Report accepted by QBCC, not your annual reporting."); b();
+    L.push("Please be advised, if your Net Tangible Assets reduce by 30% or more, you will need to provide QBCC with an MFR Report or Self-Certifying Declaration within 30 days of the reduction."); b();
+    L.push("You can exceed your Maximum Revenue by up to 10% without providing updated financial information to QBCC. If your actual revenue exceeds your Maximum Revenue by more than 10%, you must provide QBCC with an MFR Report or Self-Certifying Declaration to amend your Maximum Revenue."); b();
     L.push("**For Your Records:**");
     L.push(`\u2022 ${d.year} Annual Financial Reporting Documentation`);
     L.push(`\u2022 ${d.year} Annual Reporting Submission`);
     const extras = (d.supportLabels || []).filter(l => l !== "Management Accounts");
     L.push(`\u2022 ${d.year} Management Accounts${extras.length ? (extras.length === 1 ? " and " : ", ") + joinList(extras) : ""}`);
     b();
-    L.push("**Your QBCC Position** (based on the last MFR Report accepted by QBCC)");
-    L.push(`Net Tangible Assets    ${d.nta || NR("net tangible assets")}`);
-    L.push(`Maximum Revenue    ${d.maxRevenue || NR("maximum revenue")}`);
-    L.push(`Next Annual Reporting Date    **${d.ard ? fmtDate(d.ard) : NR("next annual reporting date")}**`);
-    b();
-    L.push("Please be advised, if your Net Tangible Assets reduce by 30% or more, you will need to provide QBCC with an MFR Report or Self-Certifying Declaration within 30 days of the reduction."); b();
-    L.push("You can exceed your Maximum Revenue by up to 10% without providing updated financial information to QBCC. If your actual revenue exceeds your Maximum Revenue by more than 10%, you must provide QBCC with an MFR Report or Self-Certifying Declaration to amend your Maximum Revenue."); b();
     if (d.extra && d.extra.trim()) { d.extra.trim().split(/\n\s*\n/).forEach(p => { L.push(p.replace(/\n/g, " ").trim()); b(); }); }
-    L.push("Nothing needs to be signed or returned. If you have any queries in relation to this, please contact our office."); b();
+    L.push("If you have any queries in relation to this, please contact our office."); b();
     L.push("Kind Regards,"); b();
     L.push("[SIGNATURE]"); b();
     (SIGNERS[d.signer] || SIGNERS.Renee).forEach(x => L.push(`**${x}**`));
@@ -565,7 +595,9 @@ fieldset.pick legend{font-size:13px;font-weight:500;padding:0;margin:0 0 6px}
   }
   function composeEmail(e) {
     const subject = e.subject || `${e.year} QBCC Annual Reporting - ${e.client}`;
-    const intro = `Your ${e.year} QBCC Annual Reporting has been completed${e.submitted ? ` and was lodged with QBCC on ${fmtDate(e.submitted)}` : " and lodged with QBCC"}. Please find attached your ${e.year} QBCC Annual Reporting Pack for your records. Nothing needs to be signed or returned.`;
+    const introParts = [`Your ${e.year} QBCC Annual Reporting has been completed${e.submitted ? " and was lodged with QBCC on " : " and lodged with QBCC"}`, e.submitted ? fmtDate(e.submitted) : "", `. Please find attached your ${e.year} QBCC Annual Reporting Pack for your records. Nothing needs to be signed or returned.`];
+    const intro = introParts.join("");
+    const introHtml = H(introParts[0]) + (introParts[1] ? `<b>${H(introParts[1])}</b>` : "") + H(introParts[2]);
     const pos = [["Net Tangible Assets", e.nta || ""], ["Maximum Revenue", e.maxRevenue || ""], ["Next Annual Reporting Date", e.ard ? fmtDate(e.ard) : ""]];
     const rep = e.reported || reportedRows(e.figures || {}).map(([l, v]) => [l, money(v)]);
     const reminders = ["Please be advised, if your Net Tangible Assets reduce by 30% or more, you will need to provide QBCC with an MFR Report or Self-Certifying Declaration within 30 days of the reduction.",
@@ -581,7 +613,7 @@ ${rows.map(([l, v], i) => `<tr><td style="padding:6px 12px;border-bottom:1px sol
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0">
 <div style="${FONT}">
 ${para(H(e.opening || "Hello") + ",")}
-${para(H(intro))}
+${para(introHtml)}
 ${table("Your QBCC Position", pos, "Based on the last MFR Report accepted by QBCC. Lodging your annual reporting does not change these figures.")}
 ${reminders.map(r => para(H(r))).join("\n")}
 ${rep.length ? table(`Reported to QBCC for the Year Ended ${ye}`, rep, "From your 2026 Annual Reporting Submission.".replace("2026", e.year)) : ""}
@@ -1071,11 +1103,11 @@ ${extraHtml}
     renderFiles(); fillFromDocs(); refresh();
   }
   async function readPdf(f) {
-    const { pages, pageCount } = await C.pdfRows(pdfjsLib, f.bytes);
-    f.pages = pages; f.pageCount = pageCount;
+    const { pages, loose, pageCount } = await C.pdfRows(pdfjsLib, f.bytes);
+    f.pages = pages; f.loose = loose; f.pageCount = pageCount;
     f.kind = C.kindOf(f.name, pages.flat().join("\n"));
     if (f.kind === "ard") f.ard = C.parseARD(pages);
-    if (f.kind === "submission") f.sub = C.parseSubmission(pages);
+    if (f.kind === "submission") f.sub = C.parseSubmission(pages, loose);
   }
   function autoRoles() {
     const pdfs = state.files.filter(f => f.pdf && !f.error);
@@ -1108,7 +1140,7 @@ ${extraHtml}
         const was = f.role; f.role = sel.value;
         // Only one ARD notification and one submission can be in the pack
         if (f.role === "ard" || f.role === "submission") state.files.forEach(o => { if (o !== f && o.role === f.role) o.role = "out"; });
-        if ((f.role === "ard" && !f.ard) || (f.role === "submission" && !f.sub)) { if (f.role === "ard") f.ard = C.parseARD(f.pages || []); else f.sub = C.parseSubmission(f.pages || []); }
+        if ((f.role === "ard" && !f.ard) || (f.role === "submission" && !f.sub)) { if (f.role === "ard") f.ard = C.parseARD(f.pages || []); else f.sub = C.parseSubmission(f.pages || [], f.loose); }
         renderFiles();
         if (was === "ard" || was === "submission" || f.role === "ard" || f.role === "submission") fillFromDocs(); else refresh();
       };
