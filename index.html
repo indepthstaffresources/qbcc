@@ -273,8 +273,6 @@ section[aria-label="Inputs"],aside{min-width:0}
     <input type="text" id="opening">
     <label for="subject">Subject</label>
     <input type="text" id="subject">
-    <label for="sender">Signed off by</label>
-    <input type="text" id="sender">
 
     <div class="grp">Anything extra?</div>
     <label for="extra">Goes into the letter and the email exactly as typed</label>
@@ -540,7 +538,7 @@ section[aria-label="Inputs"],aside{min-width:0}
     const rep = e.reported || reportedRows(e.figures || {}).map(([l, v]) => [l, money(v)]);
     const reminders = "If your net tangible assets reduce by 30% or more, you will need to give QBCC an MFR report or Self-Certifying Declaration within 30 days. You can exceed your maximum revenue by up to 10%, but if your actual revenue goes more than 10% over, you must give QBCC an MFR report or Self-Certifying Declaration to amend it.";
     const ye = e.yearEnd ? fmtDate(e.yearEnd) : `30 June ${e.year}`;
-    const close = "Nothing needs to be signed or returned. If you have any questions, please give us a call.";
+    const close = "Nothing needs to be signed or returned.";
     const FONT = "font-family:'Segoe UI',Arial,sans-serif;font-size:10.5pt;color:#414042";
     const table = (title, rows, note) => `<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:6px 0 4px;min-width:360px;${FONT}">
 <tr><td colspan="2" style="background:#56776C;color:#FFFFFF;font-weight:bold;padding:7px 12px">${H(title)}</td></tr>
@@ -557,11 +555,10 @@ ${para(H(reminders))}
 ${rep.length ? table(`What we reported to QBCC for the year ended ${ye}`, rep, "From your annual reporting submission. Lodging your annual reporting doesn\u2019t change your maximum revenue.") : ""}
 ${extraHtml}
 ${para(H(close))}
-${para("Kind regards,<br>" + H(e.sender || "") + "<br>Indepth Accounting")}
 </div></body></html>`;
     const tline = rows => rows.map(([l, v]) => `  ${l}: ${v}`).join("\n");
     const text = [`${e.opening || "Hi"},`, intro, "Your QBCC position (from your ARD notification)", tline(pos), reminders,
-      rep.length ? `What we reported to QBCC for the year ended ${ye}\n${tline(rep)}` : "", e.extra || "", close, `Kind regards,\n${e.sender || ""}\nIndepth Accounting`]
+      rep.length ? `What we reported to QBCC for the year ended ${ye}\n${tline(rep)}` : "", e.extra || "", close]
       .filter(Boolean).join("\n\n");
     return { subject, html, text };
   }
@@ -757,7 +754,8 @@ ${para("Kind regards,<br>" + H(e.sender || "") + "<br>Indepth Accounting")}
     for (const s of c.sections) {
       const dp = out.addPage([W, PH]); dp.drawPage(divBg, { x: 0, y: 0, width: W, height: PH });
       const dl = s.divider.filter(Boolean);
-      dl.forEach((t, i) => centred(dp, t, (dl.length > 1 ? 475.5 : 462) - 26.5 * i, gMed, 20, LIGHT, 2));
+      const top = 462 + 13.25 * (dl.length - 1);
+      dl.forEach((t, i) => centred(dp, t, top - 26.5 * i, gMed, 20, LIGHT, 2));
       for (const d of s.docs) (await out.copyPages(d.doc, d.doc.getPageIndices())).forEach(p => out.addPage(p));
     }
     const tocPage = out.getPage(1);
@@ -892,7 +890,6 @@ ${para("Kind regards,<br>" + H(e.sender || "") + "<br>Indepth Accounting")}
     box.appendChild(p); box.appendChild(b);
   }
   function afterSignIn() {
-    if (!$("sender").value) $("sender").value = (state.account && state.account.name) || "";
     loadAssets(); loadReport(); loadClients(); refresh();
   }
   async function loadAssets() {
@@ -1125,7 +1122,7 @@ ${para("Kind regards,<br>" + H(e.sender || "") + "<br>Indepth Accounting")}
       nta: val("nta"), maxRevenue: val("maxRev"), ard: C.parseDate(val("ard")), ardText: val("ard"),
       year: fy, yearEnd: C.parseDate(val("yearEnd")), submitted: C.parseDate(val("submitted")),
       supportLabels: [...new Set(sup.map(f => C.supportKind(f.name).label))],
-      extra: $("extra").value, opening: val("opening"), subject: val("subject"), sender: val("sender"),
+      extra: $("extra").value, opening: val("opening"), subject: val("subject"),
       reported: [["Total revenue", "f_rev"], ["Total expenses", "f_exp"], ["Total assets", "f_ast"], ["Total liabilities", "f_lia"], ["Total equity", "f_eq"], ["Cash at the end of the year", "f_cash"]]
         .map(([l, id]) => [l, moneyField(id)]).filter(([, c]) => c !== null && !isNaN(c)).map(([l, c]) => [l, C.money(c)]),
     };
@@ -1240,9 +1237,9 @@ ${para("Kind regards,<br>" + H(e.sender || "") + "<br>Indepth Accounting")}
     const letter = await C.buildLetterPdf(PDFLib, fontkit, ASSETS, letterText(d), d.signer);
     const a = ardFile(), s = subFile(), sup = supportFiles();
     const sections = [];
-    if (a) sections.push({ label: "ARD Notification", divider: ["ARD", "NOTIFICATION"], docs: [{ label: "ARD Notification from QBCC", bytes: a.bytes }] });
-    if (s) sections.push({ label: "Annual Reporting Submission", divider: ["ANNUAL REPORTING", "SUBMISSION"], docs: [{ label: s.sub && s.sub.caseNo ? `Annual Reporting Submission (case ${s.sub.caseNo})` : "Annual Reporting Submission", bytes: s.bytes }] });
-    if (sup.length) sections.push({ label: `${d.year} Management Accounts`, divider: [`${d.year} MANAGEMENT`, "ACCOUNTS"], docs: sup.map(f => ({ label: C.supportKind(f.name).label, bytes: f.bytes })) });
+    if (a) sections.push({ label: "Annual Financial Reporting Documentation", divider: ["ANNUAL FINANCIAL", "REPORTING", "DOCUMENTATION"], docs: [{ label: `${d.year} Annual Financial Reporting Documentation`, bytes: a.bytes }] });
+    if (s) sections.push({ label: "Annual Reporting Submission", divider: ["ANNUAL REPORTING", "SUBMISSION"], docs: [{ label: `${d.year} Annual Reporting Submission`, bytes: s.bytes }] });
+    if (sup.length) sections.push({ label: "Management Accounts", divider: ["MANAGEMENT", "ACCOUNTS"], docs: sup.map(f => ({ label: `${d.year} ${C.supportKind(f.name).label}`, bytes: f.bytes })) });
     const pack = await C.buildPackPdf(PDFLib, fontkit, ASSETS, letter, {
       entity: d.client.toUpperCase(), entityName: d.client, title: "QBCC ANNUAL REPORTING",
       periodLine: d.yearEnd ? `FOR THE YEAR ENDED ${C.fmtDate(d.yearEnd).toUpperCase()}` : `FOR THE ${d.year} FINANCIAL YEAR`, sections,
